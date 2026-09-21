@@ -288,6 +288,67 @@ Flag as a concern when:
 - route transitions are deeply coupled to platform bootstrapping
 - deep-link ambiguity is only discovered at runtime
 
+### 16. Route reachability (a route that renders is not a route a player can open)
+
+A destination with a render branch in the nav host **and** entries in the
+back-navigation map **and** the auth-required list can still be impossible to reach. The
+inverse error is just as easy: a route whose only direct `onNavigate` calls sit *inside
+the nav host* is **not** unreachable. Audit all three emitter forms before calling
+anything dead:
+
+1. **Direct** — `onNavigate(Route.X)`, scanning **all** main source **including the nav
+   host file**. The nav host's own callbacks ARE emitters; treating them as "internal" to
+   avoid double-counting is exactly how a live entry point gets missed.
+2. **Indirect via a catalog/menu table** — `MenuEntry(Route.X, ...)` in a catalog, fired
+   later through `onNavigate(entry.route)`. A scan for `onNavigate(Route.` alone misses
+   every one of these and over-reports by dozens of routes.
+3. **Deep link** — the URL parser, delivered through a shared `openDeepLink` funnel.
+
+Lifecycle routes (bootstrap, auth gate, reentry, exploration, root menu, recovery,
+consent/dashboard) are seeded by the root ViewModel, so a naive scan flags them too.
+They are not defects.
+
+**A switched-off route looks identical to a broken one.** Before declaring a surface
+dead, read its **feature flag**, not the code default — gated destinations are usually
+filtered out entirely (menu entries dropped; a gated route bounced back), so "invisible"
+and "broken" present the same way. Query the live source of truth rather than the client
+default, since flags typically live server-side:
+
+```bash
+psql -d <db> -tAc "select flag_key, enabled from <schema>.feature_flags order by flag_key"
+```
+
+A correctly gated-off route is **not** a defect. Report it as "correct but currently
+invisible" and name the flag. When most flags are off, state the consequence plainly: the
+app is behind the *flags*, not behind the code. Changing a product flag is the user's call.
+
+**The fingerprint of a never-wired entry point: an orphan i18n key.** A label authored
+across every language catalog but referenced nowhere in UI code means the entry was
+designed and never added (e.g. `ENTRY_OPEN_MULTIPLAYER`, `ENTRY_OPEN_AR_MODE`). Sweep the
+families that name entry points (`ENTRY_*`, `DOOR_*` and similar) as a first-class target —
+the general orphan-key list is dominated by inert admin/diagnostic strings and buries
+these.
+
+**Read a test exemption as a confession.** When an invariant test carries an exclusion for
+precisely the surface you are auditing (`allGatedRoutes - catalogRoutes - Route.AR`), that
+exclusion is usually the defect being blessed. Delete it and assert the stronger invariant
+— but verify first whether the exempted route has a real entry point elsewhere, because the
+excluded name may be *pointing at* a live entry (an excluded "lantern" was a real on-screen
+lantern). If it does, the route was never unreachable and the real defect lies elsewhere.
+
+**If entries resolve by looking each route up in a catalog** (`byRoute.getValue(route)`),
+a room/list referencing a route **absent from the catalog throws**. Adding to the catalog
+is always safe; adding to a list requires the catalog entry to exist first. Prefer reusing
+an existing string for a new entry's title/detail over adding a duplicate translation.
+
+**After adding an entry, confirm the destination module is packaged** —
+`grep "feature:<x>" app/build.gradle.kts`. A door into a module the app does not include
+resolves to nothing.
+
+Run `scripts/audit_route_reachability.py <repo-root>` for the whole check in one pass — it
+enumerates all three emitter forms and lists routes that render with no entry, avoiding
+the false-positive greps described above.
+
 ---
 
 ## Severity framework
